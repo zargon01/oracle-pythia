@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import Optional
 import logging
 import time
+import json
 
 from HitApi import call_chat_api
 
@@ -11,29 +12,37 @@ app = FastAPI(title="Blueverse API Wrapper")
 logging.basicConfig(level=logging.INFO)
 
 
-# 📦 Request Schema
 class ChatRequest(BaseModel):
     type: str
     query: str
     current_code: Optional[str] = None
 
 
-# 📡 Health Check
 @app.get("/")
 def health():
     return {"status": "running"}
 
 
-# 🤖 Chat Endpoint
 @app.post("/chat")
 def chat(req: ChatRequest):
     start_time = time.time()
 
     try:
-        # 🔧 Build query (inject current_code if present)
+        # 🔧 Build query
         final_query = req.query
+
         if req.current_code:
             final_query += f"\n\nExisting Code:\n{req.current_code}"
+
+        # 🔥 Force structured response
+        final_query += """
+        
+STRICTLY return valid JSON:
+{
+  "code": "...",
+  "explanation": "..."
+}
+"""
 
         response = call_chat_api(req.type, final_query)
 
@@ -43,37 +52,36 @@ def chat(req: ChatRequest):
                 detail=response.text
             )
 
-        # 🧠 Parse response
-        try:
-            data = response.json()
-        except Exception:
-            data = response.text
-
-        # 🔍 Extract code + explanation (depends on API format)
-        code = None
-        explanation = None
         try:
             data = response.json()
         except Exception:
             data = {}
-        if isinstance(data, dict):
-            # Adjust keys based on actual API response
-            code = data.get("response","")
-            # code = data.get("code") or data.get("output") or str(data)
-            explanation = f"Generated using {data.get('responseSource', 'unknown model')}"
-            # explanation = data.get("explanation") or data.get("message") or ""
-            backend_time = data.get("execution_time", None)
-        else:
-            code = data
-            explanation = ""
+
+        # ✅ Extract model + backend timing
+        model = data.get("responseSource", "unknown")
+        backend_time = data.get("execution_time", None)
+
+        raw_output = data.get("response", "")
+
+        code = raw_output
+        explanation = ""  # ✅ ALWAYS present
+
+        # 🔍 Try parsing model JSON
+        try:
+            parsed = json.loads(raw_output)
+            code = parsed.get("code", raw_output)
+            explanation = parsed.get("explanation", "")
+        except Exception:
+            # fallback: keep raw output as code, explanation stays ""
+            pass
 
         response_time = round(time.time() - start_time, 3)
 
-        
         return {
             "status": "success",
             "code": code,
-            "explanation": explanation,
+            "explanation": explanation,  # ✅ ALWAYS present
+            "model": model,
             "response_time": response_time,
             "backend_time": backend_time
         }
