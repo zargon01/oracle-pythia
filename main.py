@@ -1,6 +1,8 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from typing import Optional
 import logging
+import time
 
 from HitApi import call_chat_api
 
@@ -9,23 +11,31 @@ app = FastAPI(title="Blueverse API Wrapper")
 logging.basicConfig(level=logging.INFO)
 
 
-# Request schema
+# 📦 Request Schema
 class ChatRequest(BaseModel):
     type: str
     query: str
+    current_code: Optional[str] = None
 
 
-# Health check
+# 📡 Health Check
 @app.get("/")
 def health():
     return {"status": "running"}
 
 
-# Chat endpoint
+# 🤖 Chat Endpoint
 @app.post("/chat")
 def chat(req: ChatRequest):
+    start_time = time.time()
+
     try:
-        response = call_chat_api(req.type, req.query)
+        # 🔧 Build query (inject current_code if present)
+        final_query = req.query
+        if req.current_code:
+            final_query += f"\n\nExisting Code:\n{req.current_code}"
+
+        response = call_chat_api(req.type, final_query)
 
         if not response.ok:
             raise HTTPException(
@@ -33,15 +43,39 @@ def chat(req: ChatRequest):
                 detail=response.text
             )
 
-        # Handle JSON or text response
+        # 🧠 Parse response
         try:
             data = response.json()
         except Exception:
             data = response.text
 
+        # 🔍 Extract code + explanation (depends on API format)
+        code = None
+        explanation = None
+        try:
+            data = response.json()
+        except Exception:
+            data = {}
+        if isinstance(data, dict):
+            # Adjust keys based on actual API response
+            code = data.get("response","")
+            # code = data.get("code") or data.get("output") or str(data)
+            explanation = f"Generated using {data.get('responseSource', 'unknown model')}"
+            # explanation = data.get("explanation") or data.get("message") or ""
+            backend_time = data.get("execution_time", None)
+        else:
+            code = data
+            explanation = ""
+
+        response_time = round(time.time() - start_time, 3)
+
+        
         return {
             "status": "success",
-            "data": data
+            "code": code,
+            "explanation": explanation,
+            "response_time": response_time,
+            "backend_time": backend_time
         }
 
     except Exception as e:

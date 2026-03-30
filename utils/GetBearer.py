@@ -53,6 +53,7 @@ def get_bearer_token(force_refresh=False) -> str:
 
     with _lock:  # 🔥 prevents race condition
         if not force_refresh and _cached_token and (time.time() - _token_time < TOKEN_TTL):
+            print("Using cached token")
             return _cached_token
 
         print("🔄 Fetching new bearer token...")
