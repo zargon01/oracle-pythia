@@ -12,10 +12,25 @@ app = FastAPI(title="Blueverse API Wrapper")
 logging.basicConfig(level=logging.INFO)
 
 
+# 📦 Request Schema
 class ChatRequest(BaseModel):
     type: str
     query: str
     current_code: Optional[str] = None
+
+
+# 🔧 Helper: Clean LLM Output
+def clean_llm_output(raw: str) -> str:
+    if not raw:
+        return ""
+
+    raw = raw.strip()
+
+    # Remove markdown wrappers like ```json ... ```
+    if raw.startswith("```"):
+        raw = raw.replace("```json", "").replace("```", "").strip()
+
+    return raw
 
 
 @app.get("/")
@@ -34,16 +49,20 @@ def chat(req: ChatRequest):
         if req.current_code:
             final_query += f"\n\nExisting Code:\n{req.current_code}"
 
-        # 🔥 Force structured response
+        # 🔥 Strong instruction for structured output
         final_query += """
         
-STRICTLY return valid JSON:
+STRICTLY return ONLY valid JSON.
+DO NOT include markdown, backticks, or extra text.
+
+Format:
 {
   "code": "...",
   "explanation": "..."
 }
 """
 
+        # 📡 Call API
         response = call_chat_api(req.type, final_query)
 
         if not response.ok:
@@ -52,35 +71,40 @@ STRICTLY return valid JSON:
                 detail=response.text
             )
 
+        # 🧠 Parse outer API response
         try:
             data = response.json()
         except Exception:
             data = {}
 
-        # ✅ Extract model + backend timing
+        # ✅ Extract metadata
         model = data.get("responseSource", "unknown")
         backend_time = data.get("execution_time", None)
 
         raw_output = data.get("response", "")
 
         code = raw_output
-        explanation = ""  # ✅ ALWAYS present
+        explanation = ""  # ALWAYS present
 
-        # 🔍 Try parsing model JSON
+        # 🔍 Clean + parse LLM output
+        cleaned_output = clean_llm_output(raw_output)
+
         try:
-            parsed = json.loads(raw_output)
-            code = parsed.get("code", raw_output)
-            explanation = parsed.get("explanation", "")
-        except Exception:
-            # fallback: keep raw output as code, explanation stays ""
-            pass
+            parsed = json.loads(cleaned_output)
 
+            if isinstance(parsed, dict):
+                code = parsed.get("code", raw_output)
+                explanation = parsed.get("explanation", "")
+        except Exception:
+            logging.warning("⚠️ Failed to parse LLM JSON, using fallback")
+
+        # ⏱ Total response time
         response_time = round(time.time() - start_time, 3)
 
         return {
             "status": "success",
             "code": code,
-            "explanation": explanation,  # ✅ ALWAYS present
+            "explanation": explanation,
             "model": model,
             "response_time": response_time,
             "backend_time": backend_time
